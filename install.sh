@@ -18,14 +18,17 @@ ok()    { echo -e "${GREEN}[Trimr]${NC} $1"; }
 fail()  { echo -e "${RED}[Trimr]${NC} $1"; exit 1; }
 
 echo ""
-echo -e "${CYAN}"
-echo "  _____ _                    "
-echo " |_   _| |_  _ __  _ _      "
-echo "   | | | ' \| '  \| '_|     "
-echo "   |_| |_||_|_|_|_|_|       "
-echo ""
-echo "  AI Agent Cost Control Engine"
+echo -e "${RED}"
+echo "  ████████╗██████╗ ██╗███╗   ███╗██████╗ "
+echo "  ╚══██╔══╝██╔══██╗██║████╗ ████║██╔══██╗"
+echo "     ██║   ██████╔╝██║██╔████╔██║██████╔╝"
+echo "     ██║   ██╔══██╗██║██║╚██╔╝██║██╔══██╗"
+echo "     ██║   ██║  ██║██║██║ ╚═╝ ██║██║  ██║"
+echo "     ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝╚═╝  ╚═╝"
 echo -e "${NC}"
+echo "     AI Agent Cost Control Engine  v0.1.0"
+echo ""
+
 
 # ── Detect OS / 检测系统 ─────────────────────────
 info "Detecting platform... / 检测系统平台..."
@@ -120,7 +123,15 @@ ok "Dependencies installed. / 依赖安装完成。"
 
 # ── Config / 配置文件 ────────────────────────────
 if [ ! -f "$TRIMR_INSTALL_DIR/.env" ]; then
-    cp "$TRIMR_INSTALL_DIR/.env.example" "$TRIMR_INSTALL_DIR/.env"
+    cat > "$TRIMR_INSTALL_DIR/.env" << 'ENVFILE'
+HOST=0.0.0.0
+PORT=8000
+DEBUG=False
+
+DATABASE_URL=sqlite:///./trimr.db
+
+CLOUD_API_URL=https://alpha.cloud-api.trimrlab.cloud
+ENVFILE
     ok "Created config file. / 已创建配置文件。"
 fi
 
@@ -181,4 +192,4 @@ echo "  Starting Trimr... / 正在启动 Trimr..."
 echo ""
 
 export PATH="$TRIMR_BIN:$PATH"
-exec "$TRIMR_DIR/start.sh"
+"$TRIMR_DIR/start.sh" </dev/tty

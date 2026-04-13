@@ -163,6 +163,14 @@ async def ensure_authenticated() -> bool:
                 })
 
                 print(t("auth.device_registered", name=device_result.get("device_name")))
+
+                token = device_result.get("device_token")
+                print("\n" + "=" * 50)
+                print(t("auth.device_token_title"))
+                print(f"\n  {token}\n")
+                print(t("auth.device_token_hint"))
+                print("=" * 50)
+
                 print(t("auth.completed"))
 
                 return True

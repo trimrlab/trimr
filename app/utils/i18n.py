@@ -55,6 +55,14 @@ MESSAGES = {
         "en": "[Auth] Cloud sync is not configured. Running in local-only mode.",
         "zh": "[Auth] 未配置云端同步，以本地模式运行。",
     },
+    "auth.device_token_title": {
+        "en": "  Your Device Token (copy it to Trimr Cloud):",
+        "zh": "  您的设备令牌（请复制到 Trimr 云端）：",
+    },
+    "auth.device_token_hint": {
+        "en": "  Please save this token. You will need it for cloud configuration.",
+        "zh": "  请保存此令牌，配置云端时需要使用。",
+    },
     "auth.register_failed": {
         "en": "[Auth] Error: Failed to register device",
         "zh": "[Auth] 错误: 设备注册失败",
