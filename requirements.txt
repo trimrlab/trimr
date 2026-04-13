@@ -1,0 +1,7 @@
+cryptography==46.0.6
+fastapi==0.135.2
+httpx==0.28.1
+pydantic_settings==2.13.1
+SQLAlchemy==2.0.31
+tiktoken==0.7.0
+uvicorn==0.42.0
