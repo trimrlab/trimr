@@ -181,6 +181,7 @@ def init_connector():
         logger.debug(f"[Connector] Registered handlers: {active}")
 
 _pending_confirmations: dict[str, dict] = {}
+_processed_command_ids: set[str] = set()
 
 async def start_polling():
     logger.debug(f"[Connector] start polling {POLL_INTERVAL}s")
@@ -200,7 +201,7 @@ async def handle_command(command: dict):
     cmd_type = command.get("type")
     agent_slug = command.get("agent_slug")
 
-    if cmd_id in _pending_confirmations:
+    if cmd_id in _pending_confirmations or cmd_id in _processed_command_ids:
         return
 
     if cmd_type == "update_strategy":
@@ -255,7 +256,7 @@ async def _terminal_confirm(cmd_id: str, result: dict, handler: BaseAgentHandler
         if answer.strip().lower() == "y":
             success = handler.write_config(result["new_config"])
             if success:
-                logger.debug(f"[Connector] [{handler.agent_slug}] Configuration updated")
+                logger.info(f"[Connector] [{handler.agent_slug}] Configuration updated")
                 await notify_cloud_confirmed(cmd_id)
         else:
             logger.debug(f"[Connector] [{handler.agent_slug}] Command cancelled")
@@ -267,6 +268,7 @@ async def _terminal_confirm(cmd_id: str, result: dict, handler: BaseAgentHandler
 
     finally:
         _pending_confirmations.pop(cmd_id, None)
+        _processed_command_ids.add(cmd_id)
 
 def _load_device_token() -> Optional[str]:
     credentials_file = TRIMR_DIR / "credentials.json"
@@ -299,18 +301,23 @@ async def _fetch_from_cloud() -> list[dict]:
         return []
 
 async def notify_cloud_confirmed(command_id: str):
+    logger.info(f"[Connector] Confirming command {command_id}...")
     if not settings.CLOUD_API_URL:
+        logger.info(f"[Connector] Skipped: CLOUD_API_URL is empty")
         return
     device_token = _load_device_token()
     if not device_token:
+        logger.info(f"[Connector] Skipped: no device token")
         return
     try:
+        url = f"{settings.CLOUD_API_URL}/api/commands/{command_id}/confirm"
+        logger.info(f"[Connector] POST {url}")
         async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                f"{settings.CLOUD_API_URL}/api/commands/{command_id}/confirm",
+            resp = await client.post(
+                url,
                 headers={"X-Device-Token": device_token},
             )
-            logger.debug(f"[Connector] Command {command_id} confirmed")
+            logger.info(f"[Connector] Command {command_id} confirmed, status={resp.status_code}")
     except Exception as e:
         logger.error(f"[Connector] Error confirming: {e}")
 
@@ -326,7 +333,7 @@ async def notify_cloud_cancelled(command_id: str):
                 f"{settings.CLOUD_API_URL}/api/commands/{command_id}/cancel",
                 headers={"X-Device-Token": device_token},
             )
-            logger.debug(f"[Connector] Command {command_id} cancelled")
+            logger.info(f"[Connector] Command {command_id} cancelled")
     except Exception as e:
         logger.error(f"[Connector] Error cancelling: {e}")
 
