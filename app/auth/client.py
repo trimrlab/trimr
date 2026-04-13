@@ -72,7 +72,7 @@ async def register_device(jwt_token: str) -> Optional[dict]:
                 headers={"Authorization": f"Bearer {jwt_token}"},
             )
             if resp.status_code != 200:
-                logger.error(f"[Auth] Error: {resp.json().get('data', 'Unknown')}")
+                logger.error(f"[Auth] Device register failed: status={resp.status_code} body={resp.text}")
                 return None
 
             return (resp.json()).get("data", {})
