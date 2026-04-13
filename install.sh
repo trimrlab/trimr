@@ -177,6 +177,8 @@ else
     echo "    trimr"
 fi
 echo ""
-echo "  On first launch you will be prompted to log in."
-echo "  首次启动时会提示您选择语言并登录账号。"
+echo "  Starting Trimr... / 正在启动 Trimr..."
 echo ""
+
+export PATH="$TRIMR_BIN:$PATH"
+exec "$TRIMR_DIR/start.sh"
