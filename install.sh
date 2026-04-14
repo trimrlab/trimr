@@ -50,17 +50,28 @@ info "Checking Python... / 检查 Python 环境..."
 
 PYTHON_CMD=""
 
-for cmd in python3 python py python.exe; do
-    if command -v "$cmd" &>/dev/null; then
-        version=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
-        if [ -n "$version" ]; then
-            major=$(echo "$version" | cut -d. -f1)
-            minor=$(echo "$version" | cut -d. -f2)
-            if [ "$major" -ge 3 ] && [ "$minor" -ge 10 ]; then
-                PYTHON_CMD="$cmd"
-                break
-            fi
+_check_python() {
+    local cmd="$1"
+    local version
+    version=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+    if [ -n "$version" ]; then
+        local major minor
+        major=$(echo "$version" | cut -d. -f1)
+        minor=$(echo "$version" | cut -d. -f2)
+        if [ "$major" -ge 3 ] && [ "$minor" -ge 10 ]; then
+            PYTHON_CMD="$cmd"
+            return 0
         fi
+    fi
+    return 1
+}
+
+for cmd in python3 python py python.exe; do
+    if command -v "$cmd" &>/dev/null && _check_python "$cmd"; then
+        break
+    fi
+    if which "$cmd" &>/dev/null && _check_python "$cmd"; then
+        break
     fi
 done
 
