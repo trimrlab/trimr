@@ -118,7 +118,7 @@ source "$TRIMR_VENV_DIR/bin/activate"
 # ── Dependencies / 安装依赖 ──────────────────────
 info "Installing dependencies... / 安装依赖..."
 pip install --quiet --upgrade pip
-pip install --quiet -r requirements.txt
+pip install --quiet -r "$TRIMR_INSTALL_DIR/requirements.txt"
 ok "Dependencies installed. / 依赖安装完成。"
 
 # ── Config / 配置文件 ────────────────────────────
