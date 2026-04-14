@@ -50,7 +50,7 @@ info "Checking Python... / 检查 Python 环境..."
 
 PYTHON_CMD=""
 
-for cmd in python3 python; do
+for cmd in python3 python py python.exe; do
     if command -v "$cmd" &>/dev/null; then
         version=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
         if [ -n "$version" ]; then
@@ -113,7 +113,13 @@ cd "$TRIMR_INSTALL_DIR"
 info "Setting up Python environment... / 配置 Python 环境..."
 
 [ ! -d "$TRIMR_VENV_DIR" ] && "$PYTHON_CMD" -m venv "$TRIMR_VENV_DIR"
-source "$TRIMR_VENV_DIR/bin/activate"
+
+# Activate venv (different path on Windows)
+if [ -f "$TRIMR_VENV_DIR/Scripts/activate" ]; then
+    source "$TRIMR_VENV_DIR/Scripts/activate"
+else
+    source "$TRIMR_VENV_DIR/bin/activate"
+fi
 
 # ── Dependencies / 安装依赖 ──────────────────────
 info "Installing dependencies... / 安装依赖..."
@@ -139,7 +145,11 @@ fi
 cat > "$TRIMR_DIR/start.sh" << 'SCRIPT'
 #!/usr/bin/env bash
 TRIMR_DIR="$HOME/.trimr"
-source "$TRIMR_DIR/venv/bin/activate"
+if [ -f "$TRIMR_DIR/venv/Scripts/activate" ]; then
+    source "$TRIMR_DIR/venv/Scripts/activate"
+else
+    source "$TRIMR_DIR/venv/bin/activate"
+fi
 cd "$TRIMR_DIR/app"
 python main.py
 SCRIPT
