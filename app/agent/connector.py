@@ -62,15 +62,17 @@ class BaseAgentHandler(ABC):
 
     def write_config(self, new_config: dict) -> bool:
         path = self.get_config_path()
+        logger.info(f"[{self.agent_slug}] Writing config to {path}")
         try:
             self._backup_config(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps(new_config, indent=2, ensure_ascii=False))
-            tmp.rename(path)
-            logger.debug(f"[{self.agent_slug}] Config written to {path}")
+            tmp.replace(path)
+            logger.info(f"[{self.agent_slug}] Config written successfully")
             return True
         except Exception as e:
-            logger.debug(f"[{self.agent_slug}] Error writing config: {e}")
+            logger.error(f"[{self.agent_slug}] Error writing config: {e}")
             return False
 
     def _backup_config(self, path: Path) -> Optional[str]:
@@ -258,6 +260,8 @@ async def _terminal_confirm(cmd_id: str, result: dict, handler: BaseAgentHandler
             if success:
                 logger.info(f"[Connector] [{handler.agent_slug}] Configuration updated")
                 await notify_cloud_confirmed(cmd_id)
+            else:
+                logger.error(f"[Connector] [{handler.agent_slug}] Failed to write config")
         else:
             logger.debug(f"[Connector] [{handler.agent_slug}] Command cancelled")
             await notify_cloud_cancelled(cmd_id)

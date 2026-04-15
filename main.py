@@ -125,9 +125,11 @@ async def root():
     }
 
 if __name__ == "__main__":
+    log_level = "debug" if settings.DEBUG else "warning"
     uvicorn.run(
         "main:app",
         host=settings.HOST,
         port=settings.PORT,
-        reload=False
+        reload=False,
+        log_level=log_level,
     )

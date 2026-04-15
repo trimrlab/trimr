@@ -13,7 +13,7 @@ def setup_logger(debug: bool = False) -> logging.Logger:
     if logger.handlers:
         return logger
 
-    level = logging.DEBUG if debug else logging.INFO
+    level = logging.DEBUG if debug else logging.WARNING
     logger.setLevel(level)
 
     handler = logging.StreamHandler(sys.stdout)
