@@ -122,8 +122,15 @@ class BaseAgentHandler(ABC):
         try:
             strategy_path = self.get_strategy_path()
             strategy_path.parent.mkdir(parents=True, exist_ok=True)
+            existing = {}
+            if strategy_path.exists():
+                try:
+                    existing = json.loads(strategy_path.read_text())
+                except Exception:
+                    existing = {}
             strategy_data = {k: v for k, v in payload.items() if k != "agent_slug"}
-            strategy_path.write_text(json.dumps(strategy_data, indent=2, ensure_ascii=False))
+            existing.update(strategy_data)
+            strategy_path.write_text(json.dumps(existing, indent=2, ensure_ascii=False))
             logger.debug(f"[{self.agent_slug}] Strategy updated: {strategy_data}")
             return True
         except Exception as e:
