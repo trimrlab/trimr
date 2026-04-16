@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
     init_connector()
     await ensure_authenticated()
     task = asyncio.create_task(start_polling())
-    logger.info(t("startup.started"))
+    print(t("startup.started"))
     yield
 
     task.cancel()

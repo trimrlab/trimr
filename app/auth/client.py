@@ -121,11 +121,11 @@ def _setup_data_key() -> str:
 async def ensure_authenticated() -> bool:
     if is_authenticated():
         creds = load_credentials()
-        logger.info(t("auth.already_authenticated", name=creds.get("device_name", "Unknown")))
+        print(t("auth.already_authenticated", name=creds.get("device_name", "Unknown")))
         return True
 
     if not settings.CLOUD_API_URL:
-        logger.info(t("auth.cloud_not_enabled"))
+        print(t("auth.cloud_not_enabled"))
         return True
 
     print("\n" + "=" * 50)
