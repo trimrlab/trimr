@@ -214,6 +214,15 @@ def load_agent_config(agent_slug: str = "openclaw") -> AgentConfig:
 
         provider_slug = data.get("providerSlug")
 
+        if not provider_slug:
+            strategy_path = TRIMR_DIR / f"{agent_slug}_strategy.json"
+            if strategy_path.exists():
+                try:
+                    strategy_data = json.loads(strategy_path.read_text())
+                    provider_slug = strategy_data.get("providerSlug")
+                except Exception:
+                    pass
+
         base_url = PROVIDER_BASE_URLS.get(provider_slug) if provider_slug else None
 
         primary_model = (

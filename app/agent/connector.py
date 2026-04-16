@@ -40,6 +40,8 @@ BACKUP_DIR = TRIMR_DIR / "backups"
 
 POLL_INTERVAL = 5
 
+TRIMR_ONLY_KEYS = {"providerSlug", "agent_slug"}
+
 class BaseAgentHandler(ABC):
     @property
     @abstractmethod
@@ -142,7 +144,11 @@ class OpenClawAgentHandler(BaseAgentHandler):
         return defaults[0] if defaults else Path.home() / ".openclaw" / "openclaw.json"
 
     def build_new_config(self, old_config: dict, payload: dict) -> dict:
-        return _deep_merge(old_config, payload)
+        trimr_meta = {k: v for k, v in payload.items() if k in TRIMR_ONLY_KEYS}
+        agent_payload = {k: v for k, v in payload.items() if k not in TRIMR_ONLY_KEYS}
+        if trimr_meta:
+            self.apply_strategy(trimr_meta)
+        return _deep_merge(old_config, agent_payload)
 
 class CodeBuddyAgentHandler(BaseAgentHandler):
     @property
@@ -158,7 +164,11 @@ class CodeBuddyAgentHandler(BaseAgentHandler):
         return defaults[0] if defaults else Path.home() / ".codebuddy" / "config.json"
 
     def build_new_config(self, old_config: dict, payload: dict) -> dict:
-        return _deep_merge(old_config, payload)
+        trimr_meta = {k: v for k, v in payload.items() if k in TRIMR_ONLY_KEYS}
+        agent_payload = {k: v for k, v in payload.items() if k not in TRIMR_ONLY_KEYS}
+        if trimr_meta:
+            self.apply_strategy(trimr_meta)
+        return _deep_merge(old_config, agent_payload)
 
 AGENT_HANDLERS: dict[str, BaseAgentHandler] = {
     "openclaw": OpenClawAgentHandler(),

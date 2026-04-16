@@ -395,6 +395,7 @@ async def _handle_normal(
             from app.core.tracker import calculate_cost
             final_cost = calculate_cost(ctx.model, ctx.input_tokens_actual, ctx.output_tokens)
             final_original = calculate_cost(ctx.model, ctx.input_tokens_original, ctx.output_tokens)
+            print(f"[200 OK] model={ctx.model} in={ctx.input_tokens_original}->{ctx.input_tokens_actual} out={ctx.output_tokens} saved={ctx.saved_tokens} ${final_original - final_cost - ctx.compression_cost:.6f} latency={ctx.latency_ms}ms")
             logger.debug(f"[6/6 Done] id={ctx.request_id[:8]} input={ctx.input_tokens_original}->{ctx.input_tokens_actual} output={ctx.output_tokens} saved={ctx.saved_tokens}")
             logger.debug(f"[6/6 Done] cost_original=${final_original:.6f} cost_actual=${final_cost:.6f} compression_cost=${ctx.compression_cost:.6f} net_saved=${final_original - final_cost - ctx.compression_cost:.6f}")
             logger.debug(f"[6/6 Done] strategies={ctx.strategies_used} latency={ctx.latency_ms}ms")
@@ -486,6 +487,7 @@ async def _handle_streaming(url: str, headers: dict, body: dict, ctx, db: Sessio
                 from app.core.tracker import calculate_cost
                 final_cost = calculate_cost(ctx.model, ctx.input_tokens_actual, ctx.output_tokens)
                 final_original = calculate_cost(ctx.model, ctx.input_tokens_original, ctx.output_tokens)
+                print(f"[200 OK] model={ctx.model} in={ctx.input_tokens_original}->{ctx.input_tokens_actual} out={ctx.output_tokens} saved={ctx.saved_tokens} ${final_original - final_cost - ctx.compression_cost:.6f} latency={ctx.latency_ms}ms")
                 logger.debug(f"[6/6 Done] id={ctx.request_id[:8]} input={ctx.input_tokens_original}->{ctx.input_tokens_actual} output={ctx.output_tokens} saved={ctx.saved_tokens}")
                 logger.debug(f"[6/6 Done] cost_original=${final_original:.6f} cost_actual=${final_cost:.6f} compression_cost=${ctx.compression_cost:.6f} net_saved=${final_original - final_cost - ctx.compression_cost:.6f}")
                 logger.debug(f"[6/6 Done] strategies={ctx.strategies_used} latency={ctx.latency_ms}ms output_chars={len(output_text)}")
