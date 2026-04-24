@@ -187,6 +187,67 @@ async def _generate_summary(messages: list, compression_ratio: int = 70, agent_s
     except Exception as e:
         return SummaryResult(text=f"[Summary generation failed: {str(e)}]")
 
+TOOL_RESULT_COMPRESS_THRESHOLD = 500  # tokens
+
+def _build_tool_summary_prompt(tool_content: str) -> str:
+    return f"""You are a tool output compression assistant.
+
+Compress the following tool output into a concise summary:
+1. Retain key information: file names, function names, error messages, important values
+2. Retain structural information: what type of content this is (code, search results, file listing, etc.)
+3. Remove redundant details, boilerplate code, and repetitive content
+4. Keep the summary under 20% of the original length
+5. Output as plain text, no markdown
+
+Tool output:
+{tool_content}
+
+Output the summary directly without any prefix or explanation."""
+
+
+async def _compress_tool_result(content: str, agent_slug: str = "openclaw") -> SummaryResult:
+    """Compress a single tool result content string."""
+    api_key, base_url, model = _resolve_summary_config(agent_slug)
+
+    if not api_key:
+        return SummaryResult(text=content)
+
+    prompt = _build_tool_summary_prompt(content)
+    url = f"{base_url}/chat/completions"
+
+    payload = {
+        "model":       model,
+        "messages":    [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "max_tokens":  512,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type":  "application/json",
+                },
+                json=payload,
+            )
+            if response.status_code != 200:
+                return SummaryResult(text=content)
+            data = response.json()
+            text = data["choices"][0]["message"]["content"].strip()
+            usage = data.get("usage", {})
+            return SummaryResult(
+                text=f"[Trimr Summary] {text}",
+                input_tokens=usage.get("prompt_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                model=model,
+            )
+    except Exception as e:
+        logger.debug(f"[ToolCompress] Error: {e}")
+        return SummaryResult(text=content)
+
+
 def _is_failed_summary(text: str) -> bool:
     if not text:
         return True
@@ -212,14 +273,11 @@ class CompressionEngine:
         window_size: Optional[int] = None,
     ) -> bool:
         threshold = threshold or self._default_threshold
-        window_size = window_size or self._default_window_size
 
         total_tokens = TokenCounter.count_messages(messages, model)
         logger.debug(f"[Compression] total_tokens={total_tokens}")
-        non_system = [m for m in messages if m.get("role") != "system"]
-        has_history = len(non_system) > window_size * 2
 
-        return total_tokens > threshold and has_history
+        return total_tokens > threshold
 
     async def compress(
             self,
@@ -258,9 +316,68 @@ class CompressionEngine:
             if m not in history_tool_msgs
         ]
 
-        # Limit history fed to summary LLM to control cost
-        # Only take the most recent chat messages, cap at ~2000 tokens
-        MAX_SUMMARY_INPUT_TOKENS = 2000
+        # ── Step 1: Compress long tool results (parallel) ──────────
+        import asyncio as _asyncio
+        tool_compress_input_tokens = 0
+        tool_compress_output_tokens = 0
+        tool_compressed_count = 0
+        tool_skipped_roi = 0
+
+        # Resolve summary model pricing for ROI check
+        from app.core.tracker import calculate_cost
+        _, _, summary_model_name = _resolve_summary_config(agent_slug)
+
+        # Phase 1: identify which tool msgs need compression, launch tasks in parallel
+        compress_tasks = {}  # index -> asyncio.Task
+        for i, msg in enumerate(history_tool_msgs):
+            if msg.get("role") == "tool" and isinstance(msg.get("content"), str):
+                content = msg["content"]
+                msg_tokens = TokenCounter.count_text(content, model)
+                if msg_tokens > TOOL_RESULT_COMPRESS_THRESHOLD:
+                    estimated_compressed_tokens = int(msg_tokens * 0.2)
+                    estimated_saved = msg_tokens - estimated_compressed_tokens
+                    savings_value = calculate_cost(model, estimated_saved, 0)
+
+                    estimated_summary_output = int(msg_tokens * 0.2)
+                    compress_cost = calculate_cost(summary_model_name, msg_tokens, estimated_summary_output)
+
+                    if compress_cost >= savings_value:
+                        logger.debug(f"[ToolCompress] ROI skip: {msg_tokens} tokens, compress_cost=${compress_cost:.6f} >= savings=${savings_value:.6f}")
+                        tool_skipped_roi += 1
+                        continue
+
+                    compress_tasks[i] = _asyncio.create_task(
+                        _compress_tool_result(content, agent_slug)
+                    )
+
+        # Phase 2: await all compression tasks in parallel
+        if compress_tasks:
+            results = await _asyncio.gather(*compress_tasks.values())
+            task_results = dict(zip(compress_tasks.keys(), results))
+        else:
+            task_results = {}
+
+        # Phase 3: assemble compressed tool messages in original order
+        compressed_tool_msgs = []
+        for i, msg in enumerate(history_tool_msgs):
+            if i in task_results:
+                result = task_results[i]
+                content = msg["content"]
+                if result.text != content:
+                    compressed_msg = dict(msg)
+                    compressed_msg["content"] = result.text
+                    compressed_tool_msgs.append(compressed_msg)
+                    tool_compress_input_tokens += result.input_tokens
+                    tool_compress_output_tokens += result.output_tokens
+                    tool_compressed_count += 1
+                    logger.debug(f"[ToolCompress] {TokenCounter.count_text(content, model)} -> ~{TokenCounter.count_text(result.text, model)} tokens")
+                    continue
+            compressed_tool_msgs.append(msg)
+
+        logger.debug(f"[ToolCompress] compressed={tool_compressed_count} skipped_roi={tool_skipped_roi} total={len(history_tool_msgs)}")
+
+        # ── Step 2: Compress chat history ────────────────────────
+        MAX_SUMMARY_INPUT_TOKENS = 4000
         if history_chat_msgs:
             trimmed = []
             token_budget = 0
@@ -284,42 +401,23 @@ class CompressionEngine:
 
         if summary_text:
             from_cache = True
+        elif history_chat_msgs:
+            summary_result = await _generate_summary(history_chat_msgs, compression_ratio, agent_slug)
+            summary_text = summary_result.text
+            summary_input_tokens = summary_result.input_tokens
+            summary_output_tokens = summary_result.output_tokens
+            summary_model = summary_result.model
+
+            if not summary_text:
+                summary_text = "[Summary generation failed: empty response]"
+
+            if not _is_failed_summary(summary_text):
+                _set_cached_summary(session_id, summary_text)
         else:
-            if not history_chat_msgs:
-                summary_text = ""
-            else:
-                # ROI pre-check: estimate if compression is worth the summary cost
-                history_tokens = TokenCounter.count_messages(history_chat_msgs, model)
-                estimated_saved = int(history_tokens * compression_ratio / 100)
-                # Summary LLM cost is roughly proportional to history_tokens (input) + estimated output (~20%)
-                estimated_summary_cost_tokens = history_tokens + int(history_tokens * 0.2)
-                # Only compress if we expect to save more tokens than the summary costs
-                if estimated_saved < estimated_summary_cost_tokens * 0.5:
-                    logger.debug(f"[Compression] ROI skip: estimated_saved={estimated_saved} < summary_cost_tokens={estimated_summary_cost_tokens}*0.5, not worth it")
-                    return CompressionResult(
-                        compressed_messages=messages,
-                        original_tokens=original_tokens,
-                        compressed_tokens=original_tokens,
-                        saved_tokens=0,
-                        saving_pct=0.0,
-                        summary_text="",
-                        from_cache=False,
-                    )
-                logger.debug(f"[Compression] ROI ok: estimated_saved={estimated_saved} summary_cost_tokens~={estimated_summary_cost_tokens}")
+            summary_text = ""
 
-                summary_result = await _generate_summary(history_chat_msgs, compression_ratio, agent_slug)
-                summary_text = summary_result.text
-                summary_input_tokens = summary_result.input_tokens
-                summary_output_tokens = summary_result.output_tokens
-                summary_model = summary_result.model
-
-                if not summary_text:
-                    summary_text = "[Summary generation failed: empty response]"
-
-                if not _is_failed_summary(summary_text):
-                    _set_cached_summary(session_id, summary_text)
-
-        logger.debug(f"[Compression] summary_text={summary_text}")
+        # ── Step 3: Assemble compressed messages ─────────────────
+        # Build candidate with compressed tool msgs + chat summary
         if summary_text and not _is_failed_summary(summary_text):
             summary_msg = {
                 "role": "assistant",
@@ -327,21 +425,29 @@ class CompressionEngine:
             }
             candidate = (
                 system_msgs +
-                history_tool_msgs +
+                compressed_tool_msgs +
                 [summary_msg] +
                 window_msgs
             )
-
-            candidate_tokens = TokenCounter.count_messages(candidate, model)
-            if candidate_tokens < original_tokens:
-                logger.debug(f"[Compression] Using summary, candidate_tokens={candidate_tokens} original_tokens={original_tokens}")
-                compressed_messages = candidate
-            else:
-                logger.debug(f"[Compression] Skipping summary, candidate_tokens={candidate_tokens} original_tokens={original_tokens}")
-                compressed_messages = messages
         else:
-            logger.debug(f"[Compression] No summary, original_tokens={original_tokens}")
+            candidate = (
+                system_msgs +
+                compressed_tool_msgs +
+                history_chat_msgs +
+                window_msgs
+            )
+
+        candidate_tokens = TokenCounter.count_messages(candidate, model)
+        if candidate_tokens < original_tokens:
+            logger.debug(f"[Compression] Using compressed, candidate_tokens={candidate_tokens} original_tokens={original_tokens}")
+            compressed_messages = candidate
+        else:
+            logger.debug(f"[Compression] Skipping, candidate_tokens={candidate_tokens} >= original_tokens={original_tokens}")
             compressed_messages = messages
+
+        # Accumulate compression cost from tool result compression
+        summary_input_tokens += tool_compress_input_tokens
+        summary_output_tokens += tool_compress_output_tokens
 
         compressed_tokens = TokenCounter.count_messages(compressed_messages, model)
         saved_tokens = max(0, original_tokens - compressed_tokens)
