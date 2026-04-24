@@ -305,6 +305,24 @@ async def chat_completions(request: Request, db: Session = Depends(get_db)):
     else:
         return await _handle_normal(upstream_url, headers, body, ctx, db, original_messages)
 
+def _to_content_parts(content) -> list:
+    if isinstance(content, list):
+        return list(content)
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    return []
+
+
+def _merge_content(prev, curr):
+    if isinstance(prev, str) and isinstance(curr, str):
+        if not prev:
+            return curr
+        if not curr:
+            return prev
+        return prev + "\n" + curr
+    return _to_content_parts(prev) + _to_content_parts(curr)
+
+
 def _fix_messages(messages: list) -> list:
     if not messages:
         return messages
@@ -313,15 +331,12 @@ def _fix_messages(messages: list) -> list:
     for msg in messages:
         msg = dict(msg)
         if msg.get("content") is None:
-            if msg.get("tool_calls"):
-                msg["content"] = ""
-            else:
-                msg["content"] = ""
+            msg["content"] = ""
         cleaned.append(msg)
 
     fixed = []
     for msg in cleaned:
-        role    = msg.get("role")
+        role = msg.get("role")
         content = msg.get("content", "")
 
         if msg.get("tool_calls"):
@@ -329,14 +344,7 @@ def _fix_messages(messages: list) -> list:
             continue
 
         if fixed and fixed[-1].get("role") == role and not fixed[-1].get("tool_calls"):
-            prev_content = fixed[-1].get("content", "")
-            if isinstance(prev_content, str) and isinstance(content, str):
-                fixed[-1]["content"] = prev_content + "\n" + content
-            elif isinstance(prev_content, list):
-                if isinstance(content, list):
-                    fixed[-1]["content"] = prev_content + content
-                elif content:
-                    fixed[-1]["content"].append({"type": "text", "text": content})
+            fixed[-1]["content"] = _merge_content(fixed[-1].get("content", ""), content)
         else:
             fixed.append(msg)
 

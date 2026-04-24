@@ -3,6 +3,7 @@
 @Date: 2026/3/11
 @Description: Request tracking and cost calculation
 """
+import json
 import time
 import uuid
 import tiktoken
@@ -124,18 +125,38 @@ class TokenCounter:
         return cls._encoders[model]
 
     @classmethod
+    def _count_string(cls, text: str, model: str) -> int:
+        if not text:
+            return 0
+        encoder = cls.get_encoder(model)
+        chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+        if chinese_chars == 0:
+            return len(encoder.encode(text))
+        non_chinese = ''.join(c for c in text if not '\u4e00' <= c <= '\u9fff')
+        return int(chinese_chars * 1.5) + len(encoder.encode(non_chinese))
+
+    @classmethod
+    def _count_value(cls, value, model: str) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, str):
+            return cls._count_string(value, model)
+        if isinstance(value, (int, float, bool)):
+            return cls._count_string(str(value), model)
+        if isinstance(value, list):
+            return sum(cls._count_value(item, model) for item in value)
+        if isinstance(value, dict):
+            # Serialize structured payloads (tool_calls, multimodal parts, function args)
+            return cls._count_string(json.dumps(value, ensure_ascii=False), model)
+        return 0
+
+    @classmethod
     def count_messages(cls, messages: list, model: str) -> int:
         total = 0
         for message in messages:
             total += 4
-            for key, value in message.items():
-                if isinstance(value, str):
-                    chinese_chars = sum(1 for c in value if '\u4e00' <= c <= '\u9fff')
-                    other_chars = len(value) - chinese_chars
-                    encoder = cls.get_encoder(model)
-                    total += int(chinese_chars * 1.5) + len(encoder.encode(
-                        ''.join(c for c in value if not '\u4e00' <= c <= '\u9fff')
-                    )) if other_chars else int(chinese_chars * 1.5)
+            for value in message.values():
+                total += cls._count_value(value, model)
             total += 1
         total += 3
         return total
@@ -145,12 +166,26 @@ class TokenCounter:
         encoder = cls.get_encoder(model)
         return len(encoder.encode(text))
 
+_PRICING_KEYS_BY_LENGTH = sorted(
+    (k for k in MODEL_PRICING if k != "default"),
+    key=len,
+    reverse=True,
+)
+
 def calculate_cost(model: str, input_token: int, output_token: int) -> float:
-    pricing = None
-    for model_key in MODEL_PRICING:
-        if model_key in model.lower():
-            pricing = MODEL_PRICING[model_key]
-            break
+    model_lower = model.lower()
+
+    # 1. Exact match wins
+    pricing = MODEL_PRICING.get(model_lower)
+
+    # 2. Fall back to longest-key substring match so that specific variants
+    #    (e.g. gemini-2.5-flash-lite) are matched before their prefixes
+    #    (e.g. gemini-2.5-flash).
+    if pricing is None:
+        for key in _PRICING_KEYS_BY_LENGTH:
+            if key in model_lower:
+                pricing = MODEL_PRICING[key]
+                break
 
     if pricing is None:
         pricing = MODEL_PRICING["default"]
