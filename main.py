@@ -17,32 +17,9 @@ from app.auth.client import ensure_authenticated
 from app.config import settings
 from app.db.models import init_db
 from app.utils.logger import setup_logger, get_logger
-from app.utils.i18n import load_language_preference, set_language, t
+from app.utils.i18n import t
 
 logger = setup_logger(debug=settings.DEBUG)
-
-
-def _select_language():
-    """Prompt user to select language on first run, or load saved preference."""
-    load_language_preference()
-
-    lang_file = __import__("pathlib").Path.home() / ".trimr" / "language.json"
-    if lang_file.exists():
-        return
-
-    print("\n" + "=" * 40)
-    print("  Select language / 选择语言")
-    print("=" * 40)
-    print("  1. English")
-    print("  2. 中文")
-    print("=" * 40)
-
-    choice = input("  Enter 1 or 2 / 输入 1 或 2: ").strip()
-
-    if choice == "2":
-        set_language("zh")
-    else:
-        set_language("en")
 
 
 def _print_banner():
@@ -62,7 +39,6 @@ def _print_banner():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _print_banner()
-    _select_language()
     init_db()
     init_connector()
     await ensure_authenticated()
@@ -124,7 +100,55 @@ async def root():
         "health": "/health",
     }
 
+def _cmd_restore(args):
+    from app.agent.connector import AGENT_HANDLERS
+    if not args:
+        print("Usage: trimr restore <agent_slug>")
+        print(f"Available agents: {', '.join(AGENT_HANDLERS.keys())}")
+        return 1
+    slug = args[0]
+    handler = AGENT_HANDLERS.get(slug)
+    if not handler:
+        print(f"Unknown agent: {slug}")
+        print(f"Available agents: {', '.join(AGENT_HANDLERS.keys())}")
+        return 1
+    success = handler.restore_original_config()
+    if success:
+        print(f"Restored {slug} to original config.")
+        return 0
+    print(f"Failed: no original config saved for {slug}.")
+    print("(Trimr only saves the original on its first modification.)")
+    return 1
+
+
+def _cmd_status(args):
+    from app.agent.connector import AGENT_HANDLERS, ORIGINAL_DIR
+    print("Trimr managed agents:")
+    for slug, handler in AGENT_HANDLERS.items():
+        original = ORIGINAL_DIR / f"{slug}.original.json"
+        config = handler.get_config_path()
+        marker = "✓" if original.exists() else "—"
+        print(f"  {marker} {slug}: config={config} original={'saved' if original.exists() else 'not saved'}")
+    return 0
+
+
 if __name__ == "__main__":
+    import sys
+    args = sys.argv[1:]
+    if args:
+        cmd = args[0]
+        rest = args[1:]
+        if cmd == "restore":
+            sys.exit(_cmd_restore(rest))
+        elif cmd == "status":
+            sys.exit(_cmd_status(rest))
+        elif cmd in ("-h", "--help", "help"):
+            print("Usage:")
+            print("  trimr                  Start Trimr proxy service")
+            print("  trimr restore <agent>  Restore agent config to pre-Trimr original")
+            print("  trimr status           Show managed agents and original-config status")
+            sys.exit(0)
+
     log_level = "debug" if settings.DEBUG else "warning"
     uvicorn.run(
         "main:app",

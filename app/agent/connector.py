@@ -37,10 +37,23 @@ OPENCLAW_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
 CODEBUDDY_CONFIG_PATH = Path.home() / ".codebuddy" / "config.json"
 
 BACKUP_DIR = TRIMR_DIR / "backups"
+ORIGINAL_DIR = TRIMR_DIR / "originals"
 
 POLL_INTERVAL = 5
 
-TRIMR_ONLY_KEYS = {"providerSlug", "agent_slug"}
+TRIMR_ONLY_KEYS = {"providerSlug", "agent_slug", "baseUrl", "relayApiKey", "summaryModel"}
+
+
+def _has_openai_compatible_setup(config: dict) -> bool:
+    """Check if user has already enabled an openai-compatible auth profile."""
+    if not isinstance(config, dict):
+        return False
+    auth_profiles = config.get("auth", {}).get("profiles", {})
+    if isinstance(auth_profiles, dict):
+        for key in auth_profiles:
+            if key.startswith("openai"):
+                return True
+    return False
 
 class BaseAgentHandler(ABC):
     @property
@@ -64,18 +77,33 @@ class BaseAgentHandler(ABC):
 
     def write_config(self, new_config: dict) -> bool:
         path = self.get_config_path()
-        logger.info(f"[{self.agent_slug}] Writing config to {path}")
         try:
+            self._save_original_once(path)
             self._backup_config(path)
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps(new_config, indent=2, ensure_ascii=False))
             tmp.replace(path)
-            logger.info(f"[{self.agent_slug}] Config written successfully")
             return True
         except Exception as e:
             logger.error(f"[{self.agent_slug}] Error writing config: {e}")
             return False
+
+    def _get_original_path(self) -> Path:
+        return ORIGINAL_DIR / f"{self.agent_slug}.original.json"
+
+    def _save_original_once(self, path: Path) -> Optional[str]:
+        """Save the user's original config the first time Trimr modifies it.
+        This file is preserved untouched and used by `restore_original_config`."""
+        if not path.exists():
+            return None
+        original_path = self._get_original_path()
+        if original_path.exists():
+            return str(original_path)
+        ORIGINAL_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, original_path)
+        logger.info(f"[{self.agent_slug}] Saved original config to {original_path}")
+        return str(original_path)
 
     def _backup_config(self, path: Path) -> Optional[str]:
         if not path.exists():
@@ -86,6 +114,18 @@ class BaseAgentHandler(ABC):
         shutil.copy2(path, backup_path)
         logger.debug(f"[{self.agent_slug}] Backed up config to {backup_path}")
         return str(backup_path)
+
+    def restore_original_config(self) -> bool:
+        """Restore agent config to user's original (pre-Trimr) state."""
+        original_path = self._get_original_path()
+        if not original_path.exists():
+            logger.warning(f"[{self.agent_slug}] No original config found at {original_path}")
+            return False
+        target = self.get_config_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(original_path, target)
+        logger.info(f"[{self.agent_slug}] Restored original config from {original_path}")
+        return True
 
     def rollback_config(self) -> bool:
         backups = sorted(
@@ -243,6 +283,18 @@ async def handle_command(command: dict):
             logger.debug(f"[Connector] Unknown agent: {agent_slug}")
             return
 
+        # Auto-inject openai-compatible auth profile if missing
+        existing = handler.read_config() or {}
+        if not _has_openai_compatible_setup(existing):
+            payload = command.setdefault("payload", {})
+            auth = payload.setdefault("auth", {})
+            profiles = auth.setdefault("profiles", {})
+            profiles.setdefault("openai:default", {
+                "provider": "openai",
+                "mode": "api_key",
+            })
+            print(f"[Trimr] Adding openai:default auth profile to {handler.agent_slug}")
+
         result = handler.apply(command)
         diffs = result.get("diffs", [])
 
@@ -275,12 +327,12 @@ async def _terminal_confirm(cmd_id: str, result: dict, handler: BaseAgentHandler
         if answer.strip().lower() == "y":
             success = handler.write_config(result["new_config"])
             if success:
-                logger.info(f"[Connector] [{handler.agent_slug}] Configuration updated")
+                print(f"[Trimr] {handler.agent_slug} configuration updated.")
                 await notify_cloud_confirmed(cmd_id)
             else:
-                logger.error(f"[Connector] [{handler.agent_slug}] Failed to write config")
+                print(f"[Trimr] Failed to write {handler.agent_slug} configuration.")
         else:
-            logger.debug(f"[Connector] [{handler.agent_slug}] Command cancelled")
+            print(f"[Trimr] Command cancelled.")
             await notify_cloud_cancelled(cmd_id)
 
     except Exception as e:
@@ -307,7 +359,7 @@ async def _fetch_from_cloud() -> list[dict]:
     if not device_token:
         return []
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
             resp = await client.get(
                 f"{settings.CLOUD_API_URL}/api/commands/pending",
                 headers={"X-Device-Token": device_token},
@@ -333,7 +385,7 @@ async def notify_cloud_confirmed(command_id: str):
     try:
         url = f"{settings.CLOUD_API_URL}/api/commands/{command_id}/confirm"
         logger.info(f"[Connector] POST {url}")
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
             resp = await client.post(
                 url,
                 headers={"X-Device-Token": device_token},
@@ -349,7 +401,7 @@ async def notify_cloud_cancelled(command_id: str):
     if not device_token:
         return
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
             await client.post(
                 f"{settings.CLOUD_API_URL}/api/commands/{command_id}/cancel",
                 headers={"X-Device-Token": device_token},

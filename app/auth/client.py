@@ -41,27 +41,41 @@ def is_authenticated() -> bool:
 
     return bool(creds.get("device_token"))
 
-async def login(phone: str, password: str) -> Optional[dict]:
+async def login(email: str, password: str) -> Optional[dict]:
+    url = f"{settings.CLOUD_API_URL}/api/auth/login/password"
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
             resp = await client.post(
-                f"{settings.CLOUD_API_URL}/api/auth/login/password",
-                json={"phone": phone, "password": password},
+                url,
+                json={"email": email, "password": password},
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "trimr/0.1.0",
+                },
             )
 
             if resp.status_code != 200:
-                logger.error(f"[Auth] Error: {resp.json().get('message', 'Unknown')}")
+                try:
+                    msg = resp.json().get("message", "Unknown")
+                except Exception:
+                    msg = resp.text[:200] if resp.text else f"HTTP {resp.status_code}"
+                logger.error(f"[Auth] Login failed: status={resp.status_code} url={url} body={msg}")
                 return None
 
-            return (resp.json()).get("data", {})
+            try:
+                data = resp.json()
+            except Exception:
+                logger.error(f"[Auth] Server returned non-JSON 200 response: {resp.text[:200]}")
+                return None
+            return data.get("data", {})
 
     except Exception as e:
-        logger.error(f"[Auth] Error: {e}")
+        logger.error(f"[Auth] Error: {e} url={url}")
         return None
 
 async def register_device(jwt_token: str) -> Optional[dict]:
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
             resp = await client.post(
                 f"{settings.CLOUD_API_URL}/api/devices/register",
                 json={
@@ -134,17 +148,17 @@ async def ensure_authenticated() -> bool:
     print("=" * 50)
 
     for attempt in range(3):
-        phone = input(t("auth.phone"))
+        email = input(t("auth.email")).strip()
         password = input(t("auth.password"))
 
         print(t("auth.logging_in"))
 
-        result = await login(phone, password)
+        result = await login(email, password)
 
         if result:
             jwt_token = result.get("token")
             user = result.get("user", {})
-            print(t("auth.logged_in_as", name=user.get("nickname", phone)))
+            print(t("auth.logged_in_as", name=user.get("nickname", email)))
 
             print(t("auth.registering_device"))
 
@@ -158,7 +172,7 @@ async def ensure_authenticated() -> bool:
                     "device_id": device_result.get("id"),
                     "device_name": device_result.get("device_name"),
                     "user_id": user.get("id"),
-                    "phone": phone,
+                    "email": email,
                     "data_key": data_key
                 })
 

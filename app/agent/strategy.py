@@ -19,9 +19,9 @@ TRIMR_DIR = Path.home() / ".trimr"
 
 DEFAULT_STRATEGY = {
     "type":                  "balance",
-    "compression_threshold": 2000,
-    "window_size":           3,
-    "compression_ratio":     70,
+    "compression_threshold": 6000,
+    "window_size":           5,
+    "compression_ratio":     50,
     "dedup_enabled":         True,
     "dedup_ttl":             3600,
 }
@@ -121,10 +121,13 @@ class StrategyConfig:
 
 @dataclass
 class AgentConfig:
-    api_key:      Optional[str]
+    api_key:       Optional[str]
     provider_slug: Optional[str]
-    base_url:     Optional[str]
-    model:        Optional[str]
+    base_url:      Optional[str]
+    model:         Optional[str]
+    relay_api_key: Optional[str] = None
+    relay_base_url: Optional[str] = None
+    summary_model: Optional[str] = None
     installed: bool = False
     config_path: Optional[Path] = None
 
@@ -213,16 +216,23 @@ def load_agent_config(agent_slug: str = "openclaw") -> AgentConfig:
         )
 
         provider_slug = data.get("providerSlug")
+        custom_base_url = None
+        relay_api_key = None
+        summary_model = None
 
-        if not provider_slug:
-            strategy_path = TRIMR_DIR / f"{agent_slug}_strategy.json"
-            if strategy_path.exists():
-                try:
-                    strategy_data = json.loads(strategy_path.read_text())
+        strategy_path = TRIMR_DIR / f"{agent_slug}_strategy.json"
+        if strategy_path.exists():
+            try:
+                strategy_data = json.loads(strategy_path.read_text())
+                if not provider_slug:
                     provider_slug = strategy_data.get("providerSlug")
-                except Exception:
-                    pass
+                custom_base_url = strategy_data.get("baseUrl")
+                relay_api_key = strategy_data.get("relayApiKey")
+                summary_model = strategy_data.get("summaryModel")
+            except Exception:
+                pass
 
+        # base_url: for proxy forwarding (provider direct URL)
         base_url = PROVIDER_BASE_URLS.get(provider_slug) if provider_slug else None
 
         primary_model = (
@@ -238,6 +248,9 @@ def load_agent_config(agent_slug: str = "openclaw") -> AgentConfig:
             provider_slug=provider_slug,
             base_url=base_url,
             model=model,
+            relay_api_key=relay_api_key,
+            relay_base_url=custom_base_url,
+            summary_model=summary_model,
         )
 
     except Exception as e:

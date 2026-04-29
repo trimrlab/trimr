@@ -139,8 +139,10 @@ def _extract_summary(action_name: str, args: dict) -> dict:
 # ─────────────────────────────────────────
 def get_upstream_url(agent_slug: str = "openclaw") -> str:
     agent_config = load_agent_config(agent_slug)
-    if agent_config.base_url:
-        return f"{agent_config.base_url}/chat/completions"
+    # Priority: relay baseUrl > provider baseUrl
+    base_url = agent_config.relay_base_url or agent_config.base_url
+    if base_url:
+        return f"{base_url}/chat/completions"
 
     return "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
@@ -156,7 +158,8 @@ def detect_provider(modle: str):
 def build_upstream_headers(agent_slug) -> dict:
     agent_config = load_agent_config(agent_slug)
 
-    api_key = agent_config.api_key
+    # Priority: relay apiKey > agent apiKey
+    api_key = agent_config.relay_api_key or agent_config.api_key
 
     if not api_key:
         raise HTTPException(
@@ -280,6 +283,7 @@ async def chat_completions(request: Request, db: Session = Depends(get_db)):
             messages, model, agent_slug,
             window_size=strategy.window_size,
             compression_ratio=strategy.compression_ratio,
+            compression_threshold=strategy.compression_threshold,
         )
         body["messages"] = result.compressed_messages
         ctx.input_tokens_original = result.original_tokens
@@ -289,8 +293,8 @@ async def chat_completions(request: Request, db: Session = Depends(get_db)):
 
         logger.debug(f"[4/6 Compression] original={result.original_tokens} -> compressed={result.compressed_tokens} saved={result.saved_tokens} ({result.saving_pct}%) from_cache={result.from_cache}")
 
-        # Factor in the cost of the summary LLM call
-        if result.summary_model and not result.from_cache:
+        # Factor in the cost of all compression LLM calls (chat summary + tool result compression)
+        if result.summary_model and result.summary_input_tokens > 0:
             from app.core.tracker import calculate_cost
             ctx.compression_cost = calculate_cost(
                 result.summary_model,
@@ -395,7 +399,8 @@ async def _handle_normal(
             from app.core.tracker import calculate_cost
             final_cost = calculate_cost(ctx.model, ctx.input_tokens_actual, ctx.output_tokens)
             final_original = calculate_cost(ctx.model, ctx.input_tokens_original, ctx.output_tokens)
-            print(f"[200 OK] model={ctx.model} in={ctx.input_tokens_original}->{ctx.input_tokens_actual} out={ctx.output_tokens} saved={ctx.saved_tokens} ${final_original - final_cost - ctx.compression_cost:.6f} latency={ctx.latency_ms}ms")
+            status_label = f"[ERROR] {ctx.error}" if ctx.error else "[200 OK]"
+            print(f"{status_label} model={ctx.model} in={ctx.input_tokens_original}->{ctx.input_tokens_actual} out={ctx.output_tokens} saved={ctx.saved_tokens} ${final_original - final_cost - ctx.compression_cost:.6f} latency={ctx.latency_ms}ms strategy={ctx.strategy_type} compressed={ctx.compression_triggered} cached={ctx.cache_hit}")
             logger.debug(f"[6/6 Done] id={ctx.request_id[:8]} input={ctx.input_tokens_original}->{ctx.input_tokens_actual} output={ctx.output_tokens} saved={ctx.saved_tokens}")
             logger.debug(f"[6/6 Done] cost_original=${final_original:.6f} cost_actual=${final_cost:.6f} compression_cost=${ctx.compression_cost:.6f} net_saved=${final_original - final_cost - ctx.compression_cost:.6f}")
             logger.debug(f"[6/6 Done] strategies={ctx.strategies_used} latency={ctx.latency_ms}ms")
@@ -487,7 +492,8 @@ async def _handle_streaming(url: str, headers: dict, body: dict, ctx, db: Sessio
                 from app.core.tracker import calculate_cost
                 final_cost = calculate_cost(ctx.model, ctx.input_tokens_actual, ctx.output_tokens)
                 final_original = calculate_cost(ctx.model, ctx.input_tokens_original, ctx.output_tokens)
-                print(f"[200 OK] model={ctx.model} in={ctx.input_tokens_original}->{ctx.input_tokens_actual} out={ctx.output_tokens} saved={ctx.saved_tokens} ${final_original - final_cost - ctx.compression_cost:.6f} latency={ctx.latency_ms}ms")
+                status_label = f"[ERROR] {ctx.error}" if ctx.error else "[200 OK]"
+                print(f"{status_label} model={ctx.model} in={ctx.input_tokens_original}->{ctx.input_tokens_actual} out={ctx.output_tokens} saved={ctx.saved_tokens} ${final_original - final_cost - ctx.compression_cost:.6f} latency={ctx.latency_ms}ms strategy={ctx.strategy_type} compressed={ctx.compression_triggered} cached={ctx.cache_hit}")
                 logger.debug(f"[6/6 Done] id={ctx.request_id[:8]} input={ctx.input_tokens_original}->{ctx.input_tokens_actual} output={ctx.output_tokens} saved={ctx.saved_tokens}")
                 logger.debug(f"[6/6 Done] cost_original=${final_original:.6f} cost_actual=${final_cost:.6f} compression_cost=${ctx.compression_cost:.6f} net_saved=${final_original - final_cost - ctx.compression_cost:.6f}")
                 logger.debug(f"[6/6 Done] strategies={ctx.strategies_used} latency={ctx.latency_ms}ms output_chars={len(output_text)}")

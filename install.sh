@@ -30,8 +30,8 @@ echo "     AI Agent Cost Control Engine  v0.1.0"
 echo ""
 
 
-# ── Detect OS / 检测系统 ─────────────────────────
-info "Detecting platform... / 检测系统平台..."
+# ── Detect OS ────────────────────────────────────
+info "Detecting platform..."
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -40,13 +40,13 @@ case "$OS" in
     Darwin)  PLATFORM="macOS"  ;;
     Linux)   PLATFORM="Linux"  ;;
     MINGW*|MSYS*|CYGWIN*) PLATFORM="Windows" ;;
-    *)       fail "Unsupported platform / 不支持的系统: $OS" ;;
+    *)       fail "Unsupported platform: $OS" ;;
 esac
 
-ok "Platform / 平台: $PLATFORM ($ARCH)"
+ok "Platform: $PLATFORM ($ARCH)"
 
-# ── Check Python / 检查 Python ───────────────────
-info "Checking Python... / 检查 Python 环境..."
+# ── Check Python ─────────────────────────────────
+info "Checking Python..."
 
 PYTHON_CMD=""
 
@@ -78,9 +78,8 @@ done
 if [ -z "$PYTHON_CMD" ]; then
     echo ""
     echo "  Python >= $MIN_PYTHON_VERSION not found."
-    echo "  未找到 Python >= $MIN_PYTHON_VERSION。"
     echo ""
-    echo "  Please install Python first / 请先安装 Python："
+    echo "  Please install Python first:"
     echo ""
     if [ "$PLATFORM" = "macOS" ]; then
         echo "    brew install python@3.12"
@@ -91,37 +90,37 @@ if [ -z "$PYTHON_CMD" ]; then
         echo "    https://www.python.org/downloads/"
     fi
     echo ""
-    fail "Python >= $MIN_PYTHON_VERSION is required. / 需要 Python >= $MIN_PYTHON_VERSION。"
+    fail "Python >= $MIN_PYTHON_VERSION is required."
 fi
 
 ok "Python: $($PYTHON_CMD --version)"
 
-# ── Check git / 检查 git ─────────────────────────
+# ── Check git ────────────────────────────────────
 if ! command -v git &>/dev/null; then
-    fail "git is not installed. Please install git first. / 未安装 git，请先安装。"
+    fail "git is not installed. Please install git first."
 fi
 
-# ── Setup / 初始化 ───────────────────────────────
-info "Setting up... / 初始化目录..."
+# ── Setup ────────────────────────────────────────
+info "Setting up..."
 mkdir -p "$TRIMR_DIR"
 
-# ── Clone or update / 下载或更新 ─────────────────
+# ── Clone or update ──────────────────────────────
 if [ -d "$TRIMR_INSTALL_DIR/.git" ]; then
-    info "Updating... / 更新中..."
+    info "Updating..."
     cd "$TRIMR_INSTALL_DIR"
     git pull --quiet
-    ok "Updated. / 已更新。"
+    ok "Updated."
 else
-    info "Downloading Trimr... / 下载 Trimr..."
+    info "Downloading Trimr..."
     [ -d "$TRIMR_INSTALL_DIR" ] && rm -rf "$TRIMR_INSTALL_DIR"
     git clone --quiet --depth 1 "$TRIMR_REPO" "$TRIMR_INSTALL_DIR"
-    ok "Downloaded. / 下载完成。"
+    ok "Downloaded."
 fi
 
 cd "$TRIMR_INSTALL_DIR"
 
-# ── Venv / 虚拟环境 ──────────────────────────────
-info "Setting up Python environment... / 配置 Python 环境..."
+# ── Venv ─────────────────────────────────────────
+info "Setting up Python environment..."
 
 [ ! -d "$TRIMR_VENV_DIR" ] && "$PYTHON_CMD" -m venv "$TRIMR_VENV_DIR"
 
@@ -132,13 +131,13 @@ else
     source "$TRIMR_VENV_DIR/bin/activate"
 fi
 
-# ── Dependencies / 安装依赖 ──────────────────────
-info "Installing dependencies... / 安装依赖..."
+# ── Dependencies ─────────────────────────────────
+info "Installing dependencies..."
 pip install --quiet --upgrade pip
 pip install --quiet -r "$TRIMR_INSTALL_DIR/requirements.txt"
-ok "Dependencies installed. / 依赖安装完成。"
+ok "Dependencies installed."
 
-# ── Config / 配置文件 ────────────────────────────
+# ── Config ───────────────────────────────────────
 if [ ! -f "$TRIMR_INSTALL_DIR/.env" ]; then
     cat > "$TRIMR_INSTALL_DIR/.env" << 'ENVFILE'
 HOST=0.0.0.0
@@ -149,10 +148,10 @@ DATABASE_URL=sqlite:///./trimr.db
 
 CLOUD_API_URL=https://alpha.cloud-api.trimrlab.cloud
 ENVFILE
-    ok "Created config file. / 已创建配置文件。"
+    ok "Created config file."
 fi
 
-# ── Launch script / 启动脚本 ─────────────────────
+# ── Launch script ────────────────────────────────
 cat > "$TRIMR_DIR/start.sh" << 'SCRIPT'
 #!/usr/bin/env bash
 TRIMR_DIR="$HOME/.trimr"
@@ -166,7 +165,7 @@ python main.py
 SCRIPT
 chmod +x "$TRIMR_DIR/start.sh"
 
-# ── trimr command / 命令行工具 ───────────────────
+# ── trimr command ────────────────────────────────
 TRIMR_BIN="$TRIMR_DIR/bin"
 mkdir -p "$TRIMR_BIN"
 
@@ -192,16 +191,15 @@ if [ -n "$SHELL_RC" ]; then
     fi
 fi
 
-# ── Done / 完成 ──────────────────────────────────
+# ── Done ─────────────────────────────────────────
 echo ""
 echo -e "${GREEN}============================================${NC}"
 echo -e "${GREEN}  Trimr installed successfully!${NC}"
-echo -e "${GREEN}  Trimr 安装成功！${NC}"
 echo -e "${GREEN}============================================${NC}"
 echo ""
-echo "  Install location / 安装位置: $TRIMR_DIR"
+echo "  Install location: $TRIMR_DIR"
 echo ""
-echo "  To start Trimr / 启动方式:"
+echo "  To start Trimr:"
 echo ""
 if [ "$PATH_ADDED" = true ]; then
     echo "    source $SHELL_RC && trimr"
@@ -209,7 +207,7 @@ else
     echo "    trimr"
 fi
 echo ""
-echo "  Starting Trimr... / 正在启动 Trimr..."
+echo "  Starting Trimr..."
 echo ""
 
 export PATH="$TRIMR_BIN:$PATH"

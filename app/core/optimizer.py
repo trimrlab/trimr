@@ -12,7 +12,7 @@ from typing import Optional
 import httpx
 
 from app.core.tracker import TokenCounter
-from app.agent.strategy import load_agent_config
+from app.agent.strategy import load_agent_config, PROVIDER_BASE_URLS
 from app.utils.logger import get_logger
 
 logger = get_logger()
@@ -34,13 +34,22 @@ _summary_cache: dict[str, dict] = {}
 MAX_SUMMARY_CACHE_SIZE = 50
 
 def _get_session_id(messages: list) -> str:
+    """Generate a cache key based on system prompt + message count + last message content.
+    This ensures:
+    - Different conversations (different system prompts) get different IDs
+    - Same conversation at different lengths gets different IDs (cache invalidation)
+    """
+    parts = []
     for m in messages:
         if m.get("role") == "system":
-            content = m.get("content", "")
-            return hashlib.md5(content.encode()).hexdigest()[:16]
-
-    fallback = str(messages[:2]) if messages else ""
-    return hashlib.md5(fallback.encode()).hexdigest()[:16]
+            parts.append(m.get("content", ""))
+            break
+    parts.append(str(len(messages)))
+    if messages:
+        last = messages[-1]
+        parts.append(f"{last.get('role', '')}:{str(last.get('content', ''))[:100]}")
+    raw = "|".join(parts)
+    return hashlib.md5(raw.encode()).hexdigest()[:16]
 
 def _get_cached_summary(session_id: str) -> Optional[str]:
     if session_id not in _summary_cache:
@@ -85,11 +94,18 @@ Please output the summary directly without any prefix or explanation."""
 def _resolve_summary_config(agent_slug: str = "openclaw") -> tuple[str, str, str]:
     """
     Resolve the API key, base_url, and model for summary generation.
-    Uses the agent's own API key and picks the cheapest model for its provider.
+    Uses the agent's own API key and the REAL upstream URL (bypassing Trimr proxy).
     """
     agent_config = load_agent_config(agent_slug)
-    if agent_config.api_key and agent_config.base_url:
+    api_key = agent_config.relay_api_key or agent_config.api_key
+    if api_key:
         provider = agent_config.provider_slug or "gemini"
+
+        # Priority: relay baseUrl > PROVIDER_BASE_URLS (direct)
+        upstream_base_url = agent_config.relay_base_url or PROVIDER_BASE_URLS.get(provider)
+        if not upstream_base_url:
+            return "", "", ""
+
         # Pick the cheapest/fastest model per provider for summary generation
         provider_summary_models = {
             # Major providers
@@ -126,8 +142,8 @@ def _resolve_summary_config(agent_slug: str = "openclaw") -> tuple[str, str, str
             "venice":           "llama-3.1-8b",
             "huggingface":      "meta-llama/Llama-3.1-8B-Instruct",
         }
-        model = provider_summary_models.get(provider, "gpt-4o-mini")
-        return agent_config.api_key, agent_config.base_url, model
+        model = agent_config.summary_model or provider_summary_models.get(provider, "gpt-4o-mini")
+        return api_key, upstream_base_url, model
 
     return "", "", ""
 
@@ -287,9 +303,11 @@ class CompressionEngine:
             session_id: Optional[str] = None,
             window_size: Optional[int] = None,
             compression_ratio: Optional[int] = None,
+            compression_threshold: Optional[int] = None,
     ) -> CompressionResult:
         window_size = window_size or self._default_window_size
         compression_ratio = compression_ratio or self._default_compression_ratio
+        compression_threshold = compression_threshold or self._default_threshold
 
         logger.debug(f"[Compression] window_size={window_size}")
         original_tokens = TokenCounter.count_messages(messages, model)
@@ -299,9 +317,16 @@ class CompressionEngine:
         non_system = [m for m in messages if m.get("role") != "system"]
 
         window_count = window_size * 2
-        window_msgs = non_system[-window_count:]
+        split_idx = max(0, len(non_system) - window_count)
 
-        history_msgs = non_system[:-window_count]
+        # Adjust split point to avoid breaking tool_call/tool pairs
+        # If the split lands on a "tool" message, move it back so the
+        # corresponding assistant(tool_calls) + tool(result) stay together in window
+        while split_idx > 0 and non_system[split_idx].get("role") == "tool":
+            split_idx -= 1
+
+        window_msgs = non_system[split_idx:]
+        history_msgs = non_system[:split_idx]
 
         logger.debug(f"[Compression] total_msgs={len(messages)} history={len(history_msgs)} window={len(window_msgs)}")
 
@@ -402,17 +427,23 @@ class CompressionEngine:
         if summary_text:
             from_cache = True
         elif history_chat_msgs:
-            summary_result = await _generate_summary(history_chat_msgs, compression_ratio, agent_slug)
-            summary_text = summary_result.text
-            summary_input_tokens = summary_result.input_tokens
-            summary_output_tokens = summary_result.output_tokens
-            summary_model = summary_result.model
+            # ROI pre-check for chat summary: only summarize if history exceeds threshold
+            history_chat_tokens = TokenCounter.count_messages(history_chat_msgs, model)
+            if history_chat_tokens > compression_threshold:
+                summary_result = await _generate_summary(history_chat_msgs, compression_ratio, agent_slug)
+                summary_text = summary_result.text
+                summary_input_tokens = summary_result.input_tokens
+                summary_output_tokens = summary_result.output_tokens
+                summary_model = summary_result.model
 
-            if not summary_text:
-                summary_text = "[Summary generation failed: empty response]"
+                if not summary_text:
+                    summary_text = "[Summary generation failed: empty response]"
 
-            if not _is_failed_summary(summary_text):
-                _set_cached_summary(session_id, summary_text)
+                if not _is_failed_summary(summary_text):
+                    _set_cached_summary(session_id, summary_text)
+            else:
+                logger.debug(f"[Compression] Chat history too small to summarize: {history_chat_tokens} tokens")
+                summary_text = ""
         else:
             summary_text = ""
 
@@ -441,13 +472,16 @@ class CompressionEngine:
         if candidate_tokens < original_tokens:
             logger.debug(f"[Compression] Using compressed, candidate_tokens={candidate_tokens} original_tokens={original_tokens}")
             compressed_messages = candidate
+            # Accumulate compression cost from tool result compression
+            summary_input_tokens += tool_compress_input_tokens
+            summary_output_tokens += tool_compress_output_tokens
         else:
             logger.debug(f"[Compression] Skipping, candidate_tokens={candidate_tokens} >= original_tokens={original_tokens}")
             compressed_messages = messages
-
-        # Accumulate compression cost from tool result compression
-        summary_input_tokens += tool_compress_input_tokens
-        summary_output_tokens += tool_compress_output_tokens
+            # Compression didn't help, zero out costs so user isn't charged for nothing
+            summary_input_tokens = 0
+            summary_output_tokens = 0
+            summary_model = ""
 
         compressed_tokens = TokenCounter.count_messages(compressed_messages, model)
         saved_tokens = max(0, original_tokens - compressed_tokens)

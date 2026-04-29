@@ -138,7 +138,7 @@ async def sync_to_cloud() -> dict:
         logger.debug(f"[Sync] Syncing {len(requests)} requests...")
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
                 resp = await client.post(
                     f"{settings.CLOUD_API_URL}/api/sync/stats",
                     json={
@@ -164,7 +164,7 @@ async def sync_to_cloud() -> dict:
 
         try:
             encrypted = encrypt_action_logs(action_logs, data_key)
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
                 resp = await client.post(
                     f"{settings.CLOUD_API_URL}/api/sync/action_log",
                     json={
