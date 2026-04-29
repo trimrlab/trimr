@@ -198,5 +198,5 @@ async def ensure_authenticated() -> bool:
             if remaining > 0:
                 print(t("auth.invalid_credentials", remaining=remaining))
 
-        print(t("auth.too_many_failures"))
-        return False
+    print(t("auth.too_many_failures"))
+    return False
